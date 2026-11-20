@@ -1,0 +1,480 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>電光掲示板</title>
+<style>
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body {
+    width: 100%;
+    height: 100%;
+    background-color: #050505;
+    color: #ffffff;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* LEDドット背景マスク */
+  .led-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
+    background-image: radial-gradient(rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, 0.78) 65%);
+    background-size: 6px 6px;
+  }
+  .led-overlay.off {
+    display: none;
+  }
+
+  /* 表示ステージ */
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    overflow: hidden;
+    background: #050505;
+  }
+
+  #marqueeText {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    white-space: nowrap;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    will-change: transform;
+    line-height: 1.1;
+  }
+
+  /* 右上の設定ボタン */
+  #openSettingsBtn {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    right: max(16px, env(safe-area-inset-right));
+    z-index: 20;
+    background: rgba(30, 30, 30, 0.85);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 999px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+    transition: opacity 0.2s;
+  }
+  #openSettingsBtn.hidden {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* 設定パネル */
+  #settingsPanel {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(15, 15, 18, 0.94);
+    backdrop-filter: blur(12px);
+    display: flex;
+    flex-direction: column;
+    padding: max(20px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  #settingsPanel.closed {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px);
+  }
+
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 18px;
+  }
+  .panel-header h2 {
+    font-size: 18px;
+    font-weight: 700;
+  }
+  #closeSettingsBtn {
+    background: #22c55e;
+    color: #000;
+    border: none;
+    border-radius: 999px;
+    padding: 8px 18px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .control-group {
+    margin-bottom: 18px;
+  }
+  .control-group label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: #a1a1aa;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .control-group label span {
+    color: #fff;
+  }
+
+  textarea#textInput {
+    width: 100%;
+    height: 76px;
+    background: #18181b;
+    color: #fff;
+    border: 1px solid #3f3f46;
+    border-radius: 12px;
+    padding: 12px;
+    font-size: 16px;
+    resize: none;
+    outline: none;
+    user-select: text;
+  }
+  textarea#textInput:focus {
+    border-color: #22c55e;
+  }
+
+  .btn-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .toggle-btn {
+    background: #18181b;
+    color: #d4d4d8;
+    border: 1px solid #3f3f46;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .toggle-btn.active {
+    background: #22c55e;
+    color: #000;
+    border-color: #22c55e;
+  }
+
+  .color-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .color-dot {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    cursor: pointer;
+  }
+  .color-dot.active {
+    border-color: #ffffff;
+    transform: scale(1.1);
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: #22c55e;
+    height: 28px;
+  }
+
+  .hint {
+    margin-top: auto;
+    padding-top: 12px;
+    font-size: 12px;
+    color: #71717a;
+    text-align: center;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <div id="marqueeText">ここに文字を入力！</div>
+</div>
+<div id="ledOverlay" class="led-overlay"></div>
+
+<button id="openSettingsBtn">⚙ 設定</button>
+
+<div id="settingsPanel" class="closed">
+  <div class="panel-header">
+    <h2>電光掲示板の設定</h2>
+    <button id="closeSettingsBtn">完了</button>
+  </div>
+
+  <div class="control-group">
+    <label>表示する文字</label>
+    <textarea id="textInput" placeholder="流したい文字を入力..."></textarea>
+  </div>
+
+  <div class="control-group">
+    <label>スクロール方向</label>
+    <div class="btn-row">
+      <button class="toggle-btn active" data-dir="horizontal">横スライド（右→左）</button>
+      <button class="toggle-btn" data-dir="vertical">縦スライド（下→上）</button>
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label>LEDドット風マスク</label>
+    <div class="btn-row">
+      <button class="toggle-btn active" data-led="on">LEDドット ON</button>
+      <button class="toggle-btn" data-led="off">ノーマル OFF</button>
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label>文字カラー</label>
+    <div class="color-row" id="colorRow">
+      <div class="color-dot active" data-color="#22ff55" style="background:#22ff55;"></div>
+      <div class="color-dot" data-color="#ff3b30" style="background:#ff3b30;"></div>
+      <div class="color-dot" data-color="#ff9500" style="background:#ff9500;"></div>
+      <div class="color-dot" data-color="#ffcc00" style="background:#ffcc00;"></div>
+      <div class="color-dot" data-color="#00e5ff" style="background:#00e5ff;"></div>
+      <div class="color-dot" data-color="#ff2d95" style="background:#ff2d95;"></div>
+      <div class="color-dot" data-color="#ffffff" style="background:#ffffff;"></div>
+    </div>
+  </div>
+
+  <div class="control-group">
+    <label>文字サイズ <span id="sizeVal">160px</span></label>
+    <input type="range" id="sizeRange" min="48" max="360" value="160">
+  </div>
+
+  <div class="control-group">
+    <label>スクロール速度 <span id="speedVal">5</span></label>
+    <input type="range" id="speedRange" min="1" max="15" value="5">
+  </div>
+
+  <div class="hint">
+    表示画面をダブルタップすると右上の「設定」ボタンを隠して<br>完全フルスクリーンに切り替えられます
+  </div>
+</div>
+
+<script>
+(() => {
+  const STORAGE_KEY = 'led_board_config_v1';
+
+  const defaultState = {
+    text: 'ここに文字を入力！',
+    direction: 'horizontal',
+    led: 'on',
+    color: '#22ff55',
+    fontSize: 160,
+    speed: 5
+  };
+
+  let state = { ...defaultState };
+
+  const stage = document.getElementById('stage');
+  const marquee = document.getElementById('marqueeText');
+  const ledOverlay = document.getElementById('ledOverlay');
+  const openBtn = document.getElementById('openSettingsBtn');
+  const closeBtn = document.getElementById('closeSettingsBtn');
+  const panel = document.getElementById('settingsPanel');
+  const textInput = document.getElementById('textInput');
+  const sizeRange = document.getElementById('sizeRange');
+  const sizeVal = document.getElementById('sizeVal');
+  const speedRange = document.getElementById('speedRange');
+  const speedVal = document.getElementById('speedVal');
+
+  let pos = 0;
+  let lastTime = 0;
+
+  function loadState() {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        state = { ...defaultState, ...JSON.parse(saved) };
+      }
+    } catch (e) {}
+  }
+
+  function saveState() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch (e) {}
+  }
+
+  function resetPosition() {
+    const stageW = stage.clientWidth;
+    const stageH = stage.clientHeight;
+    if (state.direction === 'horizontal') {
+      // 画面右端のすぐ手前から即座に流れ始める位置
+      pos = Math.max(0, stageW - 12);
+      marquee.style.left = '0px';
+      marquee.style.top = '50%';
+      marquee.style.transform = `translate3d(${pos}px, -50%, 0)`;
+    } else {
+      pos = Math.max(0, stageH - 12);
+      marquee.style.left = '50%';
+      marquee.style.top = '0px';
+      marquee.style.transform = `translate3d(-50%, ${pos}px, 0)`;
+    }
+    lastTime = 0;
+  }
+
+  function applyVisuals(reset = false) {
+    marquee.textContent = state.text || ' ';
+    marquee.style.fontSize = state.fontSize + 'px';
+    marquee.style.color = state.color;
+    marquee.style.textShadow = `0 0 14px ${state.color}99, 0 0 32px ${state.color}55`;
+
+    if (state.direction === 'vertical') {
+      marquee.style.writingMode = 'vertical-rl';
+      marquee.style.textOrientation = 'upright';
+    } else {
+      marquee.style.writingMode = 'horizontal-tb';
+      marquee.style.textOrientation = 'mixed';
+    }
+
+    ledOverlay.classList.toggle('off', state.led === 'off');
+
+    textInput.value = state.text;
+    sizeRange.value = state.fontSize;
+    sizeVal.textContent = state.fontSize + 'px';
+    speedRange.value = state.speed;
+    speedVal.textContent = state.speed;
+
+    document.querySelectorAll('[data-dir]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.dir === state.direction);
+    });
+    document.querySelectorAll('[data-led]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.led === state.led);
+    });
+    document.querySelectorAll('.color-dot').forEach(dot => {
+      dot.classList.toggle('active', dot.dataset.color === state.color);
+    });
+
+    if (reset) {
+      resetPosition();
+    }
+  }
+
+  function animate(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = Math.min((timestamp - lastTime) / 1000, 0.05);
+    lastTime = timestamp;
+
+    const pxPerSec = state.speed * 80;
+    pos -= pxPerSec * dt;
+
+    if (state.direction === 'horizontal') {
+      const rect = marquee.getBoundingClientRect();
+      const textW = rect.width || marquee.offsetWidth || 200;
+      // 文字の右端が左端を抜けたら、すぐ右端から再スタート（空白を短縮）
+      if (pos < -textW + 24) {
+        pos = stage.clientWidth;
+      }
+      marquee.style.transform = `translate3d(${pos}px, -50%, 0)`;
+    } else {
+      const rect = marquee.getBoundingClientRect();
+      const textH = rect.height || marquee.offsetHeight || 200;
+      if (pos < -textH + 24) {
+        pos = stage.clientHeight;
+      }
+      marquee.style.transform = `translate3d(-50%, ${pos}px, 0)`;
+    }
+
+    requestAnimationFrame(animate);
+  }
+
+  openBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    panel.classList.remove('closed');
+  });
+
+  closeBtn.addEventListener('click', () => {
+    panel.classList.add('closed');
+    saveState();
+  });
+
+  textInput.addEventListener('input', (e) => {
+    state.text = e.target.value;
+    marquee.textContent = state.text || ' ';
+    resetPosition();
+    saveState();
+  });
+
+  document.querySelectorAll('[data-dir]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.direction = btn.dataset.dir;
+      applyVisuals(true);
+      saveState();
+    });
+  });
+
+  document.querySelectorAll('[data-led]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.led = btn.dataset.led;
+      applyVisuals(false);
+      saveState();
+    });
+  });
+
+  document.querySelectorAll('.color-dot').forEach(dot => {
+    dot.addEventListener('click', () => {
+      state.color = dot.dataset.color;
+      applyVisuals(false);
+      saveState();
+    });
+  });
+
+  sizeRange.addEventListener('input', (e) => {
+    state.fontSize = Number(e.target.value);
+    sizeVal.textContent = state.fontSize + 'px';
+    marquee.style.fontSize = state.fontSize + 'px';
+    saveState();
+  });
+
+  speedRange.addEventListener('input', (e) => {
+    state.speed = Number(e.target.value);
+    speedVal.textContent = state.speed;
+    saveState();
+  });
+
+  let lastTap = 0;
+  stage.addEventListener('touchend', (e) => {
+    const now = Date.now();
+    if (now - lastTap < 300) {
+      openBtn.classList.toggle('hidden');
+      e.preventDefault();
+    }
+    lastTap = now;
+  });
+
+  stage.addEventListener('dblclick', () => {
+    openBtn.classList.toggle('hidden');
+  });
+
+  window.addEventListener('resize', () => {
+    resetPosition();
+  });
+
+  loadState();
+  applyVisuals(true);
+  requestAnimationFrame(animate);
+})();
+</script>
+</body>
+</html>
